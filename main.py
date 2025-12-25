@@ -17,17 +17,29 @@ session = {"token": None}
 
 # -----------------[ SMART MONEY SCANNER ]------------------------
 def block_zenith_logic():
-    """ Scans NIFTY & BANKNIFTY option-chain for institutional activity """
+    """Scans NIFTY & BANKNIFTY option-chain for institutional activity in live market"""
 
     while True:
+        # -------- token check --------
         if not session["token"]:
             print("[WAIT] Token not armed. sleeping 10s...")
             time.sleep(10)
             continue
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        print(f"[{datetime.now()}] scanning market...")
+        # -------- optional market hours filter --------
+        # market hours 9:15 to 15:30 — adjust if needed
+        now = datetime.now()
+        hour = now.hour
+        minute = now.minute
+        if (hour < 9) or (hour == 9 and minute < 15) or (hour > 15 or (hour == 15 and minute > 30)):
+            print("[SLEEP] Market closed. Sleeping 5m...")
+            time.sleep(300)
+            continue
 
+        today = now.strftime("%Y-%m-%d")
+        print(f"[{now}] scanning market...")
+
+        # -------- index list --------
         for idx_id, name in [(13, "NIFTY"), (25, "BANKNIFTY")]:
             url = "https://api.dhan.co/v2/optionchain"
             headers = {
@@ -42,32 +54,43 @@ def block_zenith_logic():
                 "Expiry": today
             }
 
+            # -------- API call --------
             try:
                 r = requests.post(url, json=payload, headers=headers)
-                raw_text = r.text  # keeps debug copy
+                raw_text = r.text
+
+                # --- fix: HTML or gateway errors ---
+                if r.headers.get("Content-Type", "").startswith("text/html"):
+                    print(f"[SKIP] {name} returned HTML (502 / market closed / gateway)")
+                    continue
+
+                if r.status_code >= 500:
+                    print(f"[SKIP] {name} server error {r.status_code}")
+                    continue
+
                 response = r.json()
 
             except Exception as ex:
-                print(f"[X] Scan error {name}: {ex}")
+                print(f"[X] scan error {name}: {ex}")
                 print("[DBG] raw response:", raw_text)
                 continue
 
-            # validate data
+            # -------- data validation --------
             if not response.get("data") or not response["data"].get("oc"):
-                print(f"[!] No option-chain data returned for {name}")
+                print(f"[SKIP] No usable option-chain data for {name}")
                 print("[DBG] full response:", response)
                 continue
 
-            # -------- scan each strike ----------
+            # -------- scan each strike --------
             for strike, chain in response["data"]["oc"].items():
                 ce = chain.get("ce", {})
                 pe = chain.get("pe", {})
 
-                # both calls & puts, same logic
                 for side, data in [("CE", ce), ("PE", pe)]:
                     volume = data.get("volume", 0)
                     oi = data.get("oi", 0)
 
+                    # high conviction filters
                     if volume > 150000 or oi > 75000:
                         alert_type = "🏛️ INSTITUTIONAL CALL" if side == "CE" else "🏛️ INSTITUTIONAL PUT"
                         msg = (
@@ -79,7 +102,7 @@ def block_zenith_logic():
                             f"📊 *BLOCK METRICS:*\n"
                             f"└ Volume: {volume:,}\n"
                             f"└ Open Interest: {oi:,}\n\n"
-                            f"🔥 _Detection: Smart Money Activity_"
+                            f"🔥 _Detection: Fresh Smart Money_"
                         )
                         try:
                             bot.send_message(CHANNEL_ID, msg, parse_mode="Markdown")
@@ -104,7 +127,8 @@ def welcome(m):
     bot.reply_to(
         m,
         "🏛️ *Block Zenith Terminal Online*\n\n"
-        "Send your *Daily Dhan Access Token* to arm institutional scanner."
+        "Send your *Daily Dhan Access Token* to arm scanner.\n"
+        "_Alerts only during market hours._"
     )
 
 
@@ -113,14 +137,13 @@ def arm(m):
     session["token"] = m.text.strip()
     bot.reply_to(
         m,
-        "🚀 *System Armed.*\n"
-        "Tracking Smart Money in NIFTY & BANKNIFTY.\n"
-        "_Alerts will appear automatically._"
+        "🚀 *System Armed.* Tracking institutional flow.\n"
+        "Wait for alerts when market opens."
     )
     print("[+] New token armed — alerts reset")
 
 
-# -----------------[ LAUNCH BOT + SERVER ]------------------------
+# -----------------[ LAUNCH ]------------------------
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))).start()
     Thread(target=block_zenith_logic).start()
