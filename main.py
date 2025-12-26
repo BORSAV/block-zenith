@@ -35,12 +35,12 @@ def block_zenith_logic():
         now = datetime.now(IST)
         print(f"[{now}] scanning market...")
 
+        # token needed
         if not session["token"]:
             print("[WAIT] Token not armed. sleeping 10s...")
             time.sleep(10)
             continue
 
-        # Check market status
         if not is_market_open():
             print("[SLEEP] Market closed. Sleeping 5m...")
             time.sleep(300)
@@ -48,30 +48,33 @@ def block_zenith_logic():
 
         dhan = dhanhq(MY_CLIENT_ID, session["token"])
 
+        # MAIN SCANNER
         for idx_id, name in [(13, "NIFTY"), (25, "BANKNIFTY")]:
             try:
-                oc_data = dhan.instruments.option_chain(idx_id, "INDEX")
-                data = oc_data.get("data", [])
+                today = datetime.now(IST).strftime('%Y-%m-%d')
+                oc_data = dhan.get_option_chain(idx_id, "IDX_I", today)
+                strikes = oc_data.get("data", {}).get("oc", [])
 
-                for strike in data:
-                    for side in ["CE", "PE"]:
+                for strike in strikes:
+                    for side in ["ce", "pe"]:
                         opt = strike.get(side, {})
                         if not opt:
                             continue
 
                         volume = opt.get("volume", 0)
-                        oi = opt.get("open_interest", 0)
+                        oi = opt.get("oi", 0)
+                        ltp = opt.get("last_price", "-")
 
-                        # Thresholds — adjust as you like
+                        # THRESHOLDS — change if needed
                         if volume > 150000 or oi > 75000:
-                            alert_type = "🏛️ INSTITUTIONAL CALL" if side == "CE" else "🏛️ INSTITUTIONAL PUT"
+                            alert_type = "🏛️ INSTITUTIONAL CALL" if side == "ce" else "🏛️ INSTITUTIONAL PUT"
 
                             msg = (
                                 f"⚔️ *BLOCK ZENITH ORDER FLOW* ⚔️\n\n"
                                 f"Index: *{name}*\n"
                                 f"Signal: *{alert_type}*\n"
                                 f"Strike: *{strike['strike_price']}*\n"
-                                f"Price: ₹{opt.get('last_traded_price','-')}\n\n"
+                                f"Price: ₹{ltp}\n\n"
                                 f"📊 *BLOCK METRICS:*\n"
                                 f"└ Volume: {volume:,}\n"
                                 f"└ Open Interest: {oi:,}\n\n"
@@ -91,7 +94,8 @@ def block_zenith_logic():
 # --- FLASK SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Block Zenith 24/7 Deployment Active (IST Time Synced)"
+def home(): 
+    return "Block Zenith 24/7 Deployment Active (IST Time Synced)"
 
 
 # --- TELEGRAM HANDLERS ---
